@@ -194,17 +194,6 @@ export default function Home() {
           text: `${SEATS[ev.from as SeatIndex]} → ${SEATS[ev.to as SeatIndex]}: "${ev.text}"`,
         });
         break;
-      case "trade":
-        setPrice(ev.price);
-        push({
-          seat: ev.agent,
-          kind: "trade",
-          text:
-            ev.side === "none" || ev.size === 0
-              ? `${SEATS[ev.agent as SeatIndex]} declined to trade. Market: ${(ev.price * 100).toFixed(1)}¢`
-              : `${SEATS[ev.agent as SeatIndex]} bought ${ev.size} ${ev.side}-NUKE. Market: ${(ev.price * 100).toFixed(1)}¢`,
-        });
-        break;
       case "vote":
         push({
           seat: ev.agent,

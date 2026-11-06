@@ -12,15 +12,15 @@ import {
   pairKey,
 } from "./agents";
 
+export type Side = "NO" | "YES";
+
 export type Whisper = { from: SeatIndex; to: SeatIndex; text: string };
-export type Trade = { agent: SeatIndex; side: "YES" | "NO" | "none"; size: number };
 export type Vote = { agent: SeatIndex; pair: [number, number] };
 
 export type GameEvent =
-  | { type: "game_start"; weights: Record<string, number>; price: number; valuations: number[] }
+  | { type: "game_start"; weights: Record<string, number>; price: number; sides: Side[] }
   | { type: "turn_start"; round: number; agent: SeatIndex }
   | ({ type: "whisper" } & Whisper)
-  | { type: "trade"; agent: SeatIndex; side: "YES" | "NO" | "none"; size: number; price: number }
   | { type: "vote"; agent: SeatIndex; pair: [number, number] }
   | { type: "reasoning"; agent: SeatIndex; text: string }
   | { type: "round_resolved"; round: number; pair: [number, number]; weight: number; price: number }
@@ -30,11 +30,9 @@ export type GameEvent =
 type GameState = {
   weights: Record<string, number>;
   resolved: Set<string>;
-  shares: { yes: number[]; no: number[] };
   whispersReceived: Record<number, Whisper[]>;
-  tradeHistory: Trade[];
   resolvedLog: Array<{ round: number; pair: [number, number]; weight: number }>;
-  valuations: number[];
+  sides: Side[];
 };
 
 function seededRandom(seed: number) {
@@ -51,22 +49,17 @@ function initState(seed: number): GameState {
   PAIRS.forEach(([a, b]) => {
     weights[pairKey(a, b)] = Math.floor(rand() * 4) + 2;
   });
-  const valuations = Array.from({ length: N_SEATS }, () =>
-    Math.round((0.15 + rand() * 0.7) * 100) / 100,
+  const sides: Side[] = Array.from({ length: N_SEATS }, () =>
+    rand() < 0.5 ? "NO" : "YES",
   );
   const whispersReceived: Record<number, Whisper[]> = {};
   for (let i = 0; i < N_SEATS; i++) whispersReceived[i] = [];
   return {
     weights,
     resolved: new Set(),
-    shares: {
-      yes: Array(N_SEATS).fill(0),
-      no: Array(N_SEATS).fill(0),
-    },
     whispersReceived,
-    tradeHistory: [],
     resolvedLog: [],
-    valuations,
+    sides,
   };
 }
 
@@ -76,22 +69,13 @@ function computePrice(state: GameState): number {
     const k = pairKey(a, b);
     return acc + (state.resolved.has(k) ? 0 : state.weights[k]);
   }, 0);
-  const baseFromRisk = (remaining / total) * 0.6;
-  const yesSum = state.shares.yes.reduce((a, b) => a + b, 0);
-  const noSum = state.shares.no.reduce((a, b) => a + b, 0);
-  const net = yesSum - noSum;
-  const tradeTilt = net * 0.015;
-  return Math.max(0, Math.min(1, baseFromRisk + tradeTilt));
+  return Math.max(0, Math.min(1, (remaining / total) * 0.6));
 }
 
 const DecisionSchema = z.object({
   reasoning: z.string().describe("Your short private reasoning for this turn. One sentence."),
   whisper_to_left: z.string().describe("One short whisper to your left neighbor."),
   whisper_to_right: z.string().describe("One short whisper to your right neighbor."),
-  trade: z.object({
-    side: z.enum(["YES", "NO", "none"]),
-    size: z.number().int().min(0).max(3),
-  }),
   vote_pair: z
     .array(z.number().int().min(0).max(N_SEATS - 1))
     .length(2)
@@ -107,15 +91,6 @@ function describeState(state: GameState, round: number, agent: SeatIndex): strin
     state.whispersReceived[agent]
       .map((w) => `  - from ${SEATS[w.from]}: "${w.text}"`)
       .join("\n") || "  (none yet)";
-
-  const trades = state.tradeHistory.length
-    ? state.tradeHistory
-        .map(
-          (t) =>
-            `  - ${SEATS[t.agent]}: ${t.side === "none" ? "skipped" : `bought ${t.size} ${t.side}`}`,
-        )
-        .join("\n")
-    : "  (no trades yet)";
 
   const resolvedStr = state.resolvedLog.length
     ? state.resolvedLog
@@ -139,13 +114,11 @@ function describeState(state: GameState, round: number, agent: SeatIndex): strin
 It is round ${round + 1} of 3. You are ${SEATS[agent]} (seat ${agent}).
 Your neighbors are ${SEATS[L]} (left, seat ${L}) and ${SEATS[R]} (right, seat ${R}).
 ${SEATS[blind]} (seat ${blind}) sits directly across the pot and is invisible to you.
-All other seats that are not your direct neighbors are also hidden from you.
+All non-neighbor seats are also hidden from you.
 
 Public NUKE market price: ${(price * 100).toFixed(1)} cents.
-Public trade history:
-${trades}
 
-Pairs that have already negotiated:
+Pairs already negotiated:
 ${resolvedStr}
 
 Pairs still available this round:
@@ -154,19 +127,20 @@ ${remainingPairs}
 Whispers you received last round (private, only you see these):
 ${whispers}
 
-Your current private share holdings: NO=${state.shares.no[agent]}, YES=${state.shares.yes[agent]}.
-
-Return the JSON object matching the schema. Keep whispers and reasoning short.
+Decide: which pair should negotiate this round? Choose one that moves the final
+price in YOUR direction. Keep whispers and reasoning short.
 `.trim();
 }
 
-function systemFor(agent: SeatIndex, valuation: number): string {
-  const belief = Math.round(valuation * 100);
+function systemFor(agent: SeatIndex, side: Side): string {
+  const want =
+    side === "NO"
+      ? "You are LONG NO-NUKE. You profit when the final market price ends LOW. The lower, the better. You generally want pairs to negotiate (negotiation lowers the price)."
+      : "You are LONG YES-NUKE. You profit when the final market price ends HIGH. The higher, the better. You generally want to prevent heavy pairs from negotiating (negotiation lowers the price).";
   return [
     `You are ${SEATS[agent]}, one of ${N_SEATS} delegations at a summit.`,
     "",
-    `Your only distinguishing trait is your private belief: you think the probability of nuclear use before the summit ends is ${belief} cents out of 100.`,
-    `You profit when the final market price ends up close to your belief (${belief}¢). Use whispers, trades, and votes to move the price toward ${belief}¢.`,
+    want,
     "",
     "GAME RULES:",
     GAME_RULES,
@@ -179,7 +153,7 @@ export async function* runGame(seed: number): AsyncGenerator<GameEvent> {
     type: "game_start",
     weights: state.weights,
     price: computePrice(state),
-    valuations: state.valuations,
+    sides: state.sides,
   };
 
   for (let round = 0; round < 3; round++) {
@@ -194,7 +168,7 @@ export async function* runGame(seed: number): AsyncGenerator<GameEvent> {
       try {
         const result = await generateObject({
           model: anthropic("claude-haiku-4-5-20251001"),
-          system: systemFor(seat, state.valuations[seat]),
+          system: systemFor(seat, state.sides[seat]),
           prompt: describeState(state, round, seat),
           schema: DecisionSchema,
           temperature: 0.7,
@@ -217,19 +191,6 @@ export async function* runGame(seed: number): AsyncGenerator<GameEvent> {
       nextWhispers[R].push(whisperR);
       yield { type: "whisper", ...whisperL };
       yield { type: "whisper", ...whisperR };
-
-      const trade = decision.trade;
-      if (trade.side === "YES" && trade.size > 0) state.shares.yes[seat] += trade.size;
-      else if (trade.side === "NO" && trade.size > 0) state.shares.no[seat] += trade.size;
-      state.tradeHistory.push({ agent: seat, side: trade.side, size: trade.size });
-      const priceAfterTrade = computePrice(state);
-      yield {
-        type: "trade",
-        agent: seat,
-        side: trade.side,
-        size: trade.size,
-        price: priceAfterTrade,
-      };
 
       let [va, vb] = decision.vote_pair;
       if (va === vb) vb = (vb + 1) % N_SEATS;

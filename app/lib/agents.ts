@@ -45,15 +45,14 @@ There is a public prediction market on the contract NUKE — "nuclear weapons ar
 before the summit ends." Its price moves from 0 cents (certain peace) to 100 cents
 (certain use).
 
-Each round of the summit has three steps:
+Each round of the summit has two steps:
   1. Whisper. Send one short whisper to your left neighbor and one to your right.
-  2. Trade. You may buy shares of NO-NUKE (betting peace holds) or YES-NUKE
-     (betting nuclear use), with size 0, 1, 2, or 3, or decline (side "none").
-  3. Vote. Nominate a pair of seats to hold a direct bilateral talk. The pair with
+  2. Vote. Nominate a pair of seats to hold a direct bilateral talk. The pair with
      the plurality negotiates. Each pair can only negotiate once; doing so retires
      their pair's risk weight from the market and lowers the NUKE price.
 
-There are three rounds. Each agent profits when the final market price ends up close
-to their own private belief — in other words, your goal is to move the price toward
-your belief using whispers, trades, and votes.
+There are three rounds. Each delegation is already positioned in the market on one
+side (long NO-NUKE or long YES-NUKE) and profits when the final price ends on
+their side — low for NO-NUKE holders, high for YES-NUKE holders. Use whispers and
+votes to push the final price toward your side.
 `.trim();
